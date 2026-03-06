@@ -16,9 +16,17 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 PROJ_DIR = os.path.abspath(SPECPATH)
 
 # ---- Playwright 浏览器驱动数据 ----
-# Playwright 需要浏览器二进制文件，打包后通过环境变量指定路径
-# 用户需要先执行: python -m playwright install chromium
 playwright_datas = collect_data_files("playwright")
+
+# ---- 将 Chromium 浏览器直接打包进 dist ----
+_pw_browsers_win = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright")
+_pw_browsers_mac = os.path.join(os.path.expanduser("~"), "Library", "Caches", "ms-playwright")
+
+browser_datas = []
+for _pw_path in [_pw_browsers_win, _pw_browsers_mac]:
+    if os.path.isdir(_pw_path):
+        browser_datas.append((_pw_path, "playwright_browsers"))
+        break
 
 # ---- 主分析 ----
 a = Analysis(
@@ -27,6 +35,7 @@ a = Analysis(
     binaries=[],
     datas=[
         *playwright_datas,
+        *browser_datas,
     ],
     hiddenimports=[
         # Playwright 内部模块
@@ -60,7 +69,6 @@ a = Analysis(
         "gui.panels",
         "gui.panels.header_panel",
         "gui.panels.trades_panel",
-        "gui.panels.odds_grid_panel",
     ],
     hookspath=[],
     hooksconfig={},

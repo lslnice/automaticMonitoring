@@ -6,11 +6,16 @@ import sys
 IS_FROZEN = getattr(sys, "frozen", False)
 APP_DIR = os.path.dirname(sys.executable) if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
 
-# Playwright 浏览器路径（打包后指向 dist 目录下的 playwright_browsers）
+# Playwright 浏览器路径（打包后自动查找内置的浏览器）
 if IS_FROZEN:
-    _pw_browsers = os.path.join(os.path.dirname(sys.executable), "playwright_browsers")
-    if os.path.isdir(_pw_browsers):
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = _pw_browsers
+    _candidates = [
+        os.path.join(os.path.dirname(sys.executable), "playwright_browsers"),
+        os.path.join(getattr(sys, "_MEIPASS", ""), "playwright_browsers"),
+    ]
+    for _pw_browsers in _candidates:
+        if os.path.isdir(_pw_browsers):
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = _pw_browsers
+            break
 
 # Chrome 用户数据目录（持久化登录状态）
 CHROME_USER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".ctbwp_chrome_profile")

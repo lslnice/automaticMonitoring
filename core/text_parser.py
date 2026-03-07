@@ -46,10 +46,36 @@ def _parse_header(text: str) -> HeaderData:
     )
 
 
+def _is_trade_line(line: str) -> bool:
+    """判断是否为真实的交易行（而非UI文字）
+    真实交易行格式：
+      组合: "5  FC  6-12  10  95  700  吃"  (至少5个token，末尾含独立"吃")
+      单号: "3  3  5  5  92  110/30  吃"    (至少5个token，末尾含独立"吃")
+    排除：
+      "吃(x$)", "全吃", "吃 预测彩", "预测彩吃票等待" 等UI文字
+    """
+    line = line.strip()
+    if not line:
+        return False
+    # "吃" 必须作为独立 token 出现（不能是 "全吃"、"吃(x$)"、"吃 预测彩" 等）
+    tokens = line.split()
+    has_eat = False
+    for t in tokens:
+        if t == "吃":
+            has_eat = True
+            break
+    if not has_eat:
+        return False
+    # 至少5个token才像交易记录行
+    if len(tokens) < 5:
+        return False
+    return True
+
+
 def _parse_trades(text: str) -> list[TradeRow]:
     """
-    提取已证实交易。支持两种格式：
-      组合: "8  2-6  10  85  700  吃"  → horse_combo="2-6"
+    仅提取「我的交易」→「已证实交易」区域的数据。
+      组合: "5  FC  6-12  10  95  700  吃"  → horse_combo="6-12"
       单号: "3  3  5  5  92  110/30  吃"  → horse_combo="3"
     """
     race_num = _extract_race_num(text)
@@ -61,49 +87,73 @@ def _parse_trades(text: str) -> list[TradeRow]:
             seen.add(combo)
             trades.append(TradeRow(horse_combo=combo, race=race_num))
 
-    # ---------- 策略1: "已证实" 区域 ----------
+    # 策略1: 从「已证实交易」区域提取
     section = _find_confirmed_section(text)
     if section:
+        print(f"[解析] 已证实区域长度={len(section)}, 内容前200字: {section[:200]}")
         _extract_from_section(section, _add)
         if trades:
             return trades
 
-    # ---------- 策略2: 含 "吃" 的行 ----------
-    trade_idx = text.find("我的交易")
-    if trade_idx == -1:
+    # 策略2: 没有「已证实」标题时，在「我的交易」和「未证实」之间找含独立"吃"的交易行
+    my_trade_idx = text.find("我的交易")
+    if my_trade_idx == -1:
         return []
 
-    rest = text[trade_idx:]
-    # 截断到"未证实"之前
-    for boundary in ["未证实", "S-TAB", "贴士", "仅供参考"]:
-        bi = rest.find(boundary, 10)
-        if bi != -1:
-            rest = rest[:bi]
+    rest = text[my_trade_idx:]
+    # 截断到「未证实」之前
+    unconfirmed_idx = rest.find("未证实")
+    if unconfirmed_idx != -1:
+        rest = rest[:unconfirmed_idx]
 
-    for line in rest.split("\n"):
-        if "吃" not in line:
-            continue
-        _extract_from_line(line, _add)
+    # 只提取真实交易行
+    trade_lines = [l for l in rest.split("\n") if _is_trade_line(l)]
+    if not trade_lines:
+        return []
+
+    print(f"[解析] 策略2: 找到{len(trade_lines)}条交易行")
+    for tl in trade_lines[:5]:
+        print(f"  {tl}")
+
+    combined_lines = "\n".join(trade_lines)
+    has_combos = bool(re.search(r'(?<!\d)\d{1,2}-\d{1,2}(?!\d)', combined_lines))
+
+    for line in trade_lines:
+        if has_combos:
+            _extract_combos_only(line, _add)
+        else:
+            _extract_from_line(line, _add)
 
     return trades
 
 
 def _find_confirmed_section(text: str) -> str | None:
-    """找到"已证实"区域文本，返回该区域；找不到返回 None"""
+    """在「我的交易」范围内找「已证实交易」区域"""
+    # 必须先找到「我的交易」
+    my_trade_idx = text.find("我的交易")
+    if my_trade_idx == -1:
+        return None
+
+    # 只在「我的交易」之后的文本中搜索
+    search_text = text[my_trade_idx:]
+
+    # 严格匹配「已证实交易」或「已证实」（必须有"已"）
     confirmed_start = -1
-    for m in re.finditer(r'(?<!未)已?证实交?易?', text):
+    for m in re.finditer(r'已证实交易|已证实', search_text):
         start = m.start()
-        prefix = text[max(0, start - 1):start]
-        if prefix != "未":
-            confirmed_start = m.end()
-            break
+        # 排除「未已证实」（虽然不太可能）
+        if start > 0 and search_text[start - 1] == '未':
+            continue
+        confirmed_start = m.end()
+        break
 
     if confirmed_start == -1:
         return None
 
-    rest = text[confirmed_start:]
-    boundaries = ["未证实", "S-TAB", "贴士", "赛事", "彩池", "预测彩",
-                   "仅供参考", "即将开始", "我的喜爱", "星期"]
+    rest = search_text[confirmed_start:]
+
+    # 截断到「未证实交易」或其他边界
+    boundaries = ["未证实", "S-TAB"]
     end_pos = len(rest)
     for b in boundaries:
         idx = rest.find(b)
@@ -114,13 +164,33 @@ def _find_confirmed_section(text: str) -> str | None:
 
 
 def _extract_from_section(section: str, add_fn):
-    """从已证实区域文本中提取所有马号（组合+单号）"""
-    for line in section.split("\n"):
-        _extract_from_line(line, add_fn)
+    """从已证实区域文本中提取所有马号（组合+单号）
+    如果整个区域存在 X-Y 组合格式，则只提取组合，不提取单号
+    """
+    # 只处理真实交易行
+    trade_lines = [l for l in section.split("\n") if _is_trade_line(l)]
+    if not trade_lines:
+        return
+
+    combined = "\n".join(trade_lines)
+    has_combos = bool(re.search(r'(?<!\d)\d{1,2}-\d{1,2}(?!\d)', combined))
+
+    for line in trade_lines:
+        if has_combos:
+            _extract_combos_only(line, add_fn)
+        else:
+            _extract_from_line(line, add_fn)
+
+
+def _extract_combos_only(line: str, add_fn):
+    """仅提取 X-Y 组合格式，忽略单号"""
+    combos = re.findall(r'(?<!\d)(\d{1,2}-\d{1,2})(?!\d)', line)
+    for c in combos:
+        add_fn(c)
 
 
 def _extract_from_line(line: str, add_fn):
-    """从单行文本中提取马号"""
+    """从单行交易记录中提取马号（仅在无组合时用于提取单号）"""
     # 1) 组合: X-Y 格式
     combos = re.findall(r'(?<!\d)(\d{1,2}-\d{1,2})(?!\d)', line)
     if combos:
@@ -132,7 +202,6 @@ def _extract_from_line(line: str, add_fn):
     #    格式: "3  3  5  5  92  110/30  吃"
     #           场  马  独赢 位置 %   限额   状态
     tokens = line.split()
-    # 找所有 1~20 的纯数字 token
     small_nums = []
     for t in tokens:
         if re.match(r'^\d{1,2}$', t):

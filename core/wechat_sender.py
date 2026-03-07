@@ -92,6 +92,8 @@ def _send_windows(text: str) -> bool:
 
 def _clipboard_set_text(user32, kernel32, text: str):
     """用 Win32 API 设置剪贴板文本（支持中文）"""
+    import ctypes
+
     CF_UNICODETEXT = 13
     GMEM_MOVEABLE = 0x0002
 

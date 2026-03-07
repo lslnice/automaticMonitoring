@@ -141,38 +141,50 @@ class MainWindow(QMainWindow):
 
     # ──── 浏览器控制 ────
 
+    def _ensure_worker(self):
+        """确保 worker 线程存在（浏览器只打开一次）"""
+        if self._worker is None:
+            self._worker = BrowserWorker(self)
+            self._worker.status_changed.connect(self._on_status)
+            self._worker.page_snapshot.connect(self._on_snapshot)
+            self._worker.data_changed.connect(self._on_changed)
+            self._worker.page_count_changed.connect(
+                lambda n: self._page_count_label.setText(f"监控页面: {n}")
+            )
+            self._worker.debug_log.connect(self._on_debug)
+
     @Slot()
     def _on_start(self):
-        if self._worker and self._worker.isRunning():
-            return
         # 远程开关检查
         from main import check_remote_status
         if not check_remote_status():
             QMessageBox.critical(self, "无法启动", "系统当前不可用，请联系管理员。")
             return
+        # 清空上一场数据
         self._page_snapshots.clear()
         self._all_trades.clear()
-        self._worker = BrowserWorker(self)
-        self._worker.status_changed.connect(self._on_status)
-        self._worker.page_snapshot.connect(self._on_snapshot)
-        self._worker.data_changed.connect(self._on_changed)
-        self._worker.page_count_changed.connect(
-            lambda n: self._page_count_label.setText(f"监控页面: {n}")
-        )
-        self._worker.debug_log.connect(self._on_debug)
-        self._worker.start()
+        self._trades_panel.update_trades((), None)
+        self._grouped_text.setPlainText("")
+        self._preview_text.setPlainText("")
+
+        self._ensure_worker()
+        self._worker.start_monitoring()
         self._start_btn.setEnabled(False)
         self._stop_btn.setEnabled(True)
 
     @Slot()
     def _on_stop(self):
+        """停止监控，清空数据，但保持浏览器打开"""
         if self._worker:
-            self._worker.request_stop()
-            self._worker.wait(5000)
-            self._worker = None
+            self._worker.stop_monitoring()
+        self._page_snapshots.clear()
+        self._all_trades.clear()
+        self._trades_panel.update_trades((), None)
+        self._grouped_text.setPlainText("")
+        self._preview_text.setPlainText("")
         self._start_btn.setEnabled(True)
         self._stop_btn.setEnabled(False)
-        self._status_label.setText("状态: 已停止")
+        self._status_label.setText("状态: 已停止（浏览器保持打开）")
 
     # ──── 信号处理 ────
 
@@ -255,5 +267,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg, 5000)
 
     def closeEvent(self, event):
-        self._on_stop()
+        """关闭窗口时才关闭浏览器"""
+        if self._worker:
+            self._worker.close_browser()
+            self._worker.wait(5000)
+            self._worker = None
         event.accept()

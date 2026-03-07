@@ -1,7 +1,10 @@
 """
 浏览器工作线程：QThread + asyncio + Playwright
-策略：用 JS 递归采集所有 frame 文本 → Python 解析
-每 500ms 轮询（实时）
+浏览器生命周期独立于监控：
+  - 首次 Start 打开浏览器并开始监控
+  - Stop 仅停止监控、清空数据，浏览器保持打开
+  - 再次 Start 复用已有浏览器，重新开始监控
+  - 关闭窗口时才关闭浏览器
 """
 import asyncio
 import time
@@ -20,27 +23,12 @@ from config.settings import (
     POLL_INTERVAL_S,
 )
 
-# 递归采集所有 frame 文本的 JS（同源时可跨 frame 访问）
-_JS_COLLECT_ALL = """() => {
-    function collect(doc) {
-        let t = '';
-        try { t = doc.body ? doc.body.innerText : ''; } catch(e) {}
-        try {
-            const frames = doc.querySelectorAll('frame, iframe');
-            for (const f of frames) {
-                try {
-                    const d = f.contentDocument || f.contentWindow.document;
-                    if (d) t += '\\n' + collect(d);
-                } catch(e) {}
-            }
-        } catch(e) {}
-        return t;
-    }
-    return collect(document);
-}"""
+# 单frame文本提取JS
+_JS_GET_TEXT = "() => document.body ? document.body.innerText : ''"
 
 
 class BrowserWorker(QThread):
+    """持久浏览器工作线程，监控可反复启停"""
 
     status_changed = Signal(str)
     page_snapshot = Signal(int, object)
@@ -50,16 +38,45 @@ class BrowserWorker(QThread):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._stop_requested = False
+        self._monitoring = False       # 是否正在监控
+        self._close_browser = False    # 是否要关闭浏览器（仅退出时）
         self._loop = None
+        self._monitor_event = None     # asyncio.Event 控制监控启停
 
-    def request_stop(self):
-        self._stop_requested = True
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+    def start_monitoring(self):
+        """开始监控（如果线程未运行则同时启动浏览器）"""
+        self._monitoring = True
+        self._close_browser = False
+        if not self.isRunning():
+            self.start()
+        else:
+            # 线程已在运行（浏览器已打开），通知恢复监控
+            if self._loop and self._monitor_event:
+                self._loop.call_soon_threadsafe(self._monitor_event.set)
+
+    def stop_monitoring(self):
+        """停止监控，但保持浏览器打开"""
+        self._monitoring = False
+        if self._loop and self._monitor_event:
+            self._loop.call_soon_threadsafe(self._monitor_event.set)
+
+    def close_browser(self):
+        """关闭浏览器并退出线程（仅在关闭窗口时调用）"""
+        self._monitoring = False
+        self._close_browser = True
+        if self._loop and self._monitor_event:
+            self._loop.call_soon_threadsafe(self._monitor_event.set)
+
+    @staticmethod
+    def cleanup_lock():
+        lock_file = os.path.join(CHROME_USER_DATA_DIR, "SingletonLock")
+        try:
+            if os.path.exists(lock_file) or os.path.islink(lock_file):
+                os.remove(lock_file)
+        except Exception:
+            pass
 
     def run(self):
-        self._stop_requested = False
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
@@ -74,8 +91,6 @@ class BrowserWorker(QThread):
             except Exception:
                 pass
             self._loop = None
-            if not self._stop_requested:
-                self.debug_log.emit("工作线程意外退出")
             self.status_changed.emit("stopped")
 
     async def _async_main(self):
@@ -83,6 +98,9 @@ class BrowserWorker(QThread):
 
         self.status_changed.emit("launching")
         os.makedirs(CHROME_USER_DATA_DIR, exist_ok=True)
+        self.cleanup_lock()
+
+        self._monitor_event = asyncio.Event()
 
         async with async_playwright() as pw:
             context = await pw.chromium.launch_persistent_context(
@@ -94,12 +112,16 @@ class BrowserWorker(QThread):
                 no_viewport=True,
             )
 
-            # 监听浏览器断开
             disconnected = False
 
             def on_close():
                 nonlocal disconnected
                 disconnected = True
+                # 浏览器被用户手动关闭，退出线程
+                self._monitoring = False
+                self._close_browser = True
+                if self._monitor_event:
+                    self._monitor_event.set()
 
             context.on("close", lambda: on_close())
 
@@ -109,27 +131,35 @@ class BrowserWorker(QThread):
             except Exception:
                 pass
 
-            self.status_changed.emit("waiting_login")
+            # 主循环：监控 ↔ 等待，直到 close_browser
+            while not self._close_browser:
+                if self._monitoring:
+                    self.status_changed.emit("monitoring")
+                    await self._monitor_loop(context)
+                    # 监控结束（用户点了Stop），发出停止信号
+                    if not self._close_browser:
+                        self.status_changed.emit("stopped")
+                        self.page_count_changed.emit(0)
+                else:
+                    # 等待下一次 start_monitoring 或 close_browser
+                    self._monitor_event.clear()
+                    await self._monitor_event.wait()
 
+            # 关闭浏览器
             try:
-                await self._monitor_loop(context)
-            except Exception as e:
                 if not disconnected:
-                    self.debug_log.emit(f"监控主循环异常: {e}")
-            finally:
-                try:
-                    if not disconnected:
-                        await context.close()
-                except Exception:
-                    pass
+                    await context.close()
+            except Exception:
+                pass
+            self.cleanup_lock()
 
     async def _monitor_loop(self, context):
-        monitored = {}  # page -> state
+        monitored = {}
         idx_counter = 0
         debug_done = set()
         consecutive_errors = 0
 
-        while not self._stop_requested:
+        while self._monitoring and not self._close_browser:
             try:
                 # 发现目标页面
                 target_pages = []
@@ -166,7 +196,6 @@ class BrowserWorker(QThread):
                     if page not in monitored:
                         monitored[page] = {"snapshot": None, "index": idx_counter}
                         idx_counter += 1
-                        self.status_changed.emit("monitoring")
 
                 self.page_count_changed.emit(len(monitored))
 
@@ -178,7 +207,7 @@ class BrowserWorker(QThread):
                 # 实时轮询
                 poll_ok = False
                 for page, state in list(monitored.items()):
-                    if self._stop_requested:
+                    if not self._monitoring:
                         break
                     try:
                         if page.is_closed():
@@ -189,15 +218,22 @@ class BrowserWorker(QThread):
                         continue
 
                     try:
-                        # 在主 frame 上执行 JS，递归采集所有子 frame 文本
-                        combined = await page.evaluate(_JS_COLLECT_ALL)
+                        # 用 Playwright frame API 采集所有 frame 文本（含跨域）
+                        parts = []
+                        for frame in page.frames:
+                            try:
+                                t = await frame.evaluate(_JS_GET_TEXT)
+                                if t and len(t.strip()) > 5:
+                                    parts.append(t)
+                            except Exception:
+                                pass
+                        combined = "\n".join(parts)
 
                         if not combined or len(combined) < 20:
                             continue
 
                         poll_ok = True
 
-                        # 首次调试输出
                         if page not in debug_done:
                             debug_done.add(page)
                             print(f"[页面{state['index']}] 递归采集文本长度={len(combined)}")
@@ -246,7 +282,6 @@ class BrowserWorker(QThread):
                             monitored.pop(page, None)
                             debug_done.discard(page)
                         elif "context" in err.lower() and "destroy" in err.lower():
-                            # 页面导航中，重置debug标记以便下次重新输出
                             debug_done.discard(page)
 
                 if poll_ok:

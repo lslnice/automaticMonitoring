@@ -9,24 +9,33 @@
 
 import sys
 import os
+import glob
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # ---- 项目根目录 ----
 PROJ_DIR = os.path.abspath(SPECPATH)
 
-# ---- Playwright 浏览器驱动数据 ----
+# ---- Playwright 驱动数据 ----
 playwright_datas = collect_data_files("playwright")
 
-# ---- 将 Chromium 浏览器直接打包进 dist ----
-_pw_browsers_win = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright")
-_pw_browsers_mac = os.path.join(os.path.expanduser("~"), "Library", "Caches", "ms-playwright")
-
+# ---- 只打包 Chromium 浏览器（跳过 firefox / webkit） ----
 browser_datas = []
-for _pw_path in [_pw_browsers_win, _pw_browsers_mac]:
-    if os.path.isdir(_pw_path):
-        browser_datas.append((_pw_path, "playwright_browsers"))
-        break
+_pw_candidates = [
+    os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright"),
+    os.path.join(os.path.expanduser("~"), "Library", "Caches", "ms-playwright"),
+]
+for _pw_root in _pw_candidates:
+    if not os.path.isdir(_pw_root):
+        continue
+    # 找 chromium-* 目录
+    for d in sorted(glob.glob(os.path.join(_pw_root, "chromium*")), reverse=True):
+        if os.path.isdir(d):
+            dirname = os.path.basename(d)
+            browser_datas.append((d, os.path.join("playwright_browsers", dirname)))
+            print(f"[spec] 打包 Chromium: {d}")
+            break
+    break
 
 # ---- 主分析 ----
 a = Analysis(
@@ -38,7 +47,6 @@ a = Analysis(
         *browser_datas,
     ],
     hiddenimports=[
-        # Playwright 内部模块
         "playwright",
         "playwright.sync_api",
         "playwright.async_api",
@@ -48,13 +56,10 @@ a = Analysis(
         "playwright._impl._driver",
         "playwright._impl._transport",
         *collect_submodules("playwright"),
-        # PySide6
         "PySide6.QtCore",
         "PySide6.QtWidgets",
         "PySide6.QtGui",
-        # greenlet（Playwright 依赖）
         "greenlet",
-        # 项目模块
         "core",
         "core.browser_worker",
         "core.change_detector",
@@ -92,8 +97,8 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,  # True 保留控制台窗口方便看调试日志，发布时可改 False
-    icon=None,      # 可替换为 .ico 图标路径
+    console=True,
+    icon=None,
 )
 
 coll = COLLECT(

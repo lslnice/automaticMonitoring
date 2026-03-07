@@ -1,6 +1,6 @@
 """
 一键发送文本到微信当前聊天窗口
-跨平台：macOS (osascript) / Windows (ctypes Win32 API)
+跨平台：macOS (osascript) / Windows (clip + ctypes)
 前提：用户已打开微信并停留在目标聊天窗口
 """
 import platform
@@ -50,18 +50,15 @@ def _send_macos(text: str) -> bool:
 
 def _send_windows(text: str) -> bool:
     import ctypes
-    from ctypes import wintypes
 
     user32 = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
 
-    # 1. 复制到剪贴板
-    _clipboard_set_text(user32, kernel32, text)
+    # 1. 用 PowerShell 设置剪贴板（稳定支持中文）
+    _clipboard_set_text_ps(text)
 
     # 2. 找到微信窗口并切到前台
     hwnd = user32.FindWindowW("WeChatMainWndForPC", None)
     if not hwnd:
-        # 备用：按窗口标题找
         hwnd = user32.FindWindowW(None, "微信")
     if not hwnd:
         print("[WeChat] 找不到微信窗口")
@@ -90,22 +87,13 @@ def _send_windows(text: str) -> bool:
     return True
 
 
-def _clipboard_set_text(user32, kernel32, text: str):
-    """用 Win32 API 设置剪贴板文本（支持中文）"""
-    import ctypes
-
-    CF_UNICODETEXT = 13
-    GMEM_MOVEABLE = 0x0002
-
-    data = text.encode("utf-16le") + b"\x00\x00"
-
-    user32.OpenClipboard(0)
-    user32.EmptyClipboard()
-
-    h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
-    p = kernel32.GlobalLock(h)
-    ctypes.memmove(p, data, len(data))
-    kernel32.GlobalUnlock(h)
-
-    user32.SetClipboardData(CF_UNICODETEXT, h)
-    user32.CloseClipboard()
+def _clipboard_set_text_ps(text: str):
+    """用 PowerShell Set-Clipboard 设置剪贴板（稳定支持中文）"""
+    # 转义文本中的单引号
+    escaped = text.replace("'", "''")
+    cmd = f"Set-Clipboard -Value '{escaped}'"
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", cmd],
+        check=True, timeout=5,
+        creationflags=0x08000000,  # CREATE_NO_WINDOW
+    )

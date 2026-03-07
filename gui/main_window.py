@@ -133,6 +133,16 @@ class MainWindow(QMainWindow):
         self._send_btn.clicked.connect(self._on_send)
         layout.addWidget(self._send_btn)
 
+        # 测试发送按钮
+        self._test_btn = QPushButton("测试微信")
+        self._test_btn.setFixedHeight(24)
+        self._test_btn.setStyleSheet(
+            "QPushButton{background:#999;color:white;border-radius:4px;font-size:11px;padding:2px 8px}"
+            "QPushButton:hover{background:#777}"
+        )
+        self._test_btn.clicked.connect(self._on_test_send)
+        layout.addWidget(self._test_btn)
+
         # 信号 → 更新预览
         self._suffix_group.buttonClicked.connect(self._update_preview)
         self._amount_input.textChanged.connect(self._update_preview)
@@ -249,6 +259,13 @@ class MainWindow(QMainWindow):
         suffix = btn.text() if btn else ""
         amount = self._amount_input.text().strip()
         self._preview_text.setPlainText(format_message(grouped, suffix, amount))
+
+    @Slot()
+    def _on_test_send(self):
+        if send_to_wechat("test"):
+            self.statusBar().showMessage("测试发送成功", 3000)
+        else:
+            QMessageBox.warning(self, "测试失败", "请确认微信已打开且有聊天窗口")
 
     @Slot()
     def _on_send(self):

@@ -1,5 +1,6 @@
 """赛马实时监控系统 — 入口"""
 import sys
+import ssl
 import urllib.request
 import json
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -11,8 +12,11 @@ STATUS_URL = "https://api.liveframe.cn/api/app/base/comm/systemStatus"
 def check_remote_status() -> bool:
     """启动时检查远程开关，仅调用一次，不影响后续监控延迟"""
     try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(STATUS_URL, method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             return body.get("data") is True
     except Exception:

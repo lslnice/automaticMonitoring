@@ -25,6 +25,7 @@ def check_remote_status() -> bool:
 
 def main():
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
 
     # 强制白色模式

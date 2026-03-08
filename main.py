@@ -1,7 +1,11 @@
 """赛马实时监控系统 — 入口"""
 import sys
+
 from PySide6.QtWidgets import QApplication, QMessageBox
+
 from gui.main_window import MainWindow
+
+
 
 
 def main():

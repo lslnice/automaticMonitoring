@@ -58,8 +58,13 @@ def main():
     # 测试版提示
     QMessageBox.information(None, "提示", "当前为测试版本，使用存在时间限制。")
 
-    window = MainWindow()
-    window.show()
+    try:
+        window = MainWindow()
+        window.show()
+    except Exception:
+        import traceback
+        QMessageBox.critical(None, "启动失败", traceback.format_exc())
+        sys.exit(1)
 
     sys.exit(app.exec())
 

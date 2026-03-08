@@ -1,26 +1,7 @@
 """赛马实时监控系统 — 入口"""
 import sys
-import ssl
-import urllib.request
-import json
 from PySide6.QtWidgets import QApplication, QMessageBox
 from gui.main_window import MainWindow
-
-STATUS_URL = "https://api.liveframe.cn/api/app/base/comm/systemStatus"
-
-
-def check_remote_status() -> bool:
-    """启动时检查远程开关，仅调用一次，不影响后续监控延迟"""
-    try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(STATUS_URL, method="GET")
-        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            return body.get("data") is True
-    except Exception:
-        return False
 
 
 def main():
@@ -50,14 +31,6 @@ def main():
     palette.setColor(QPalette.Mid, QColor(200, 200, 200))
     palette.setColor(QPalette.Shadow, QColor(105, 105, 105))
     app.setPalette(palette)
-
-    # 远程开关检查（仅启动时一次，不在监控中调用）
-    if not check_remote_status():
-        QMessageBox.critical(None, "无法启动", "系统当前不可用，请联系管理员。")
-        sys.exit(1)
-
-    # 测试版提示
-    QMessageBox.information(None, "提示", "当前为测试版本，使用存在时间限制。")
 
     try:
         window = MainWindow()

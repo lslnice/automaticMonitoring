@@ -1,88 +1,67 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-赛马实时监控 — PyInstaller 打包配置
-用法（在 Windows 上执行）：
-    pip install pyinstaller
-    pyinstaller build_exe.spec
-生成目录：dist/赛马监控/赛马监控.exe
-"""
-
-import sys
 import os
-import glob
+import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-# ---- 项目根目录 ----
-PROJ_DIR = os.path.abspath(SPECPATH)
+PROJECT_ROOT = Path.cwd()
 
-# ---- Playwright 驱动数据 ----
-playwright_datas = collect_data_files("playwright")
 
-# ---- 只打包 Chromium 浏览器（跳过 firefox / webkit） ----
-browser_datas = []
-_pw_candidates = [
-    os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright"),
-    os.path.join(os.path.expanduser("~"), "Library", "Caches", "ms-playwright"),
+def _resolve_chromium_dir() -> Path:
+    """找到本机安装的完整 Chromium 目录（非 headless_shell）"""
+    browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if not browsers_path:
+        if sys.platform == "win32":
+            local_app_data = os.environ.get("LOCALAPPDATA", "")
+            browsers_path = str(Path(local_app_data) / "ms-playwright") if local_app_data else ""
+        else:
+            browsers_path = str(Path.home() / "Library" / "Caches" / "ms-playwright")
+
+    p_root = Path(browsers_path) if browsers_path else Path("")
+    if not p_root.exists():
+        raise SystemExit(f"[错误] Playwright 浏览器目录不存在: {p_root}\n请先执行: python -m playwright install chromium")
+
+    chromium_dirs = sorted(p_root.glob("chromium-*"), reverse=True)
+    if not chromium_dirs:
+        raise SystemExit("[错误] 未找到完整 Chromium。\n请执行: python -m playwright install chromium")
+
+    p = chromium_dirs[0]
+    print(f"[spec] 打包 Chromium: {p}")
+    return p
+
+
+chromium_dir = _resolve_chromium_dir()
+
+datas = [
+    ("config", "config"),
+    ("core", "core"),
+    ("gui", "gui"),
+    # 把整个 chromium-XXXX 目录打包进去，保持目录名不变
+    (str(chromium_dir), f"playwright_browsers/{chromium_dir.name}"),
+    # Playwright Python 包自带的驱动数据
+    *collect_data_files("playwright"),
 ]
-for _pw_root in _pw_candidates:
-    if not os.path.isdir(_pw_root):
-        continue
-    # 找 chromium-* 目录
-    for d in sorted(glob.glob(os.path.join(_pw_root, "chromium-*")), reverse=True):
-        if os.path.isdir(d):
-            dirname = os.path.basename(d)
-            browser_datas.append((d, os.path.join("playwright_browsers", dirname)))
-            print(f"[spec] 打包 Chromium: {d}")
-            break
-    break
 
-# ---- 主分析 ----
+hiddenimports = [
+    *collect_submodules("playwright"),
+    "PySide6.QtCore",
+    "PySide6.QtWidgets",
+    "PySide6.QtGui",
+    "greenlet",
+]
+
 a = Analysis(
-    [os.path.join(PROJ_DIR, "main.py")],
-    pathex=[PROJ_DIR],
+    ["main.py"],
+    pathex=[str(PROJECT_ROOT)],
     binaries=[],
-    datas=[
-        *playwright_datas,
-        *browser_datas,
-    ],
-    hiddenimports=[
-        "playwright",
-        "playwright.sync_api",
-        "playwright.async_api",
-        "playwright._impl",
-        "playwright._impl._api_types",
-        "playwright._impl._connection",
-        "playwright._impl._driver",
-        "playwright._impl._transport",
-        *collect_submodules("playwright"),
-        "PySide6.QtCore",
-        "PySide6.QtWidgets",
-        "PySide6.QtGui",
-        "greenlet",
-        "core",
-        "core.browser_worker",
-        "core.change_detector",
-        "core.models",
-        "core.text_parser",
-        "core.trade_grouper",
-        "core.wechat_sender",
-        "config",
-        "config.settings",
-        "gui",
-        "gui.main_window",
-        "gui.panels",
-        "gui.panels.header_panel",
-        "gui.panels.trades_panel",
-    ],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        "tkinter", "matplotlib", "numpy", "pandas",
-        "scipy", "PIL", "cv2", "torch",
-    ],
+    excludes=["tkinter", "matplotlib", "numpy", "pandas", "scipy", "PIL", "cv2", "torch"],
     noarchive=False,
+    optimize=0,
 )
 
 pyz = PYZ(a.pure)
@@ -98,7 +77,11 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon=None,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
 )
 
 coll = COLLECT(

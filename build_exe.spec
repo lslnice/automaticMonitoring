@@ -29,7 +29,7 @@ for _pw_root in _pw_candidates:
     if not os.path.isdir(_pw_root):
         continue
     # 找 chromium-* 目录
-    for d in sorted(glob.glob(os.path.join(_pw_root, "chromium*")), reverse=True):
+    for d in sorted(glob.glob(os.path.join(_pw_root, "chromium-*")), reverse=True):
         if os.path.isdir(d):
             dirname = os.path.basename(d)
             browser_datas.append((d, os.path.join("playwright_browsers", dirname)))

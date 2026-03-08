@@ -106,7 +106,6 @@ class BrowserWorker(QThread):
             context = await pw.chromium.launch_persistent_context(
                 user_data_dir=CHROME_USER_DATA_DIR,
                 headless=False,
-                channel="chrome",
                 args=["--disable-blink-features=AutomationControlled"],
                 viewport=None,
                 no_viewport=True,

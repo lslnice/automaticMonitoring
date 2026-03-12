@@ -36,11 +36,16 @@ datas = [
     ("config", "config"),
     ("core", "core"),
     ("gui", "gui"),
-    # 把整个 chromium-XXXX 目录打包进去，保持目录名不变
-    (str(chromium_dir), f"playwright_browsers/{chromium_dir.name}"),
     # Playwright Python 包自带的驱动数据
     *collect_data_files("playwright"),
 ]
+
+# macOS 上 Chromium 是 .app 包，PyInstaller 签名会失败，改由 build_mac.sh 手动复制
+# Windows 上直接打包进去
+if sys.platform == "win32":
+    datas.append((str(chromium_dir), f"playwright_browsers/{chromium_dir.name}"))
+else:
+    print(f"[spec] macOS: Chromium 将由 build_mac.sh 在打包后手动复制")
 
 hiddenimports = [
     *collect_submodules("playwright"),
@@ -93,3 +98,11 @@ coll = COLLECT(
     upx_exclude=[],
     name="赛马监控",
 )
+
+# macOS 生成 .app
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="赛马监控.app",
+        bundle_identifier="com.saima.monitor",
+    )

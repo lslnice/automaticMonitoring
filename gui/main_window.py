@@ -1,8 +1,4 @@
 """主窗口：交易监控 + 归类 + 一键发微信"""
-import json
-import ssl
-import urllib.request
-
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QStatusBar, QLineEdit,
@@ -21,21 +17,6 @@ from gui.panels.trades_panel import TradesPanel
 
 SUFFIX_OPTIONS = ["正", "正负", "+-", "/", "W", "WP", "="]
 
-STATUS_URL = "https://api.liveframe.cn/api/app/base/comm/systemStatus"
-
-
-def check_remote_status() -> bool:
-    """启动时检查远程开关，仅调用一次，不影响后续监控延迟"""
-    try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(STATUS_URL, method="GET")
-        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            return body.get("data") is True
-    except Exception:
-        return False
 
 class MainWindow(QMainWindow):
 
@@ -184,11 +165,6 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_start(self):
-        # 远程开关检查
-
-        if not check_remote_status():
-            QMessageBox.critical(self, "无法启动", "系统当前不可用，请联系管理员。")
-            return
         # 清空上一场数据
         self._page_snapshots.clear()
         self._all_trades.clear()

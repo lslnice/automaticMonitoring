@@ -8,8 +8,13 @@ APP_DIR = os.path.dirname(sys.executable) if IS_FROZEN else os.path.dirname(os.p
 
 # Playwright 浏览器路径（打包后自动查找内置的浏览器）
 if IS_FROZEN:
+    _exe_dir = os.path.dirname(sys.executable)
     _candidates = [
-        os.path.join(os.path.dirname(sys.executable), "playwright_browsers"),
+        # Windows: exe 同级目录
+        os.path.join(_exe_dir, "playwright_browsers"),
+        # macOS .app: Contents/Resources
+        os.path.join(_exe_dir, "..", "Resources", "playwright_browsers"),
+        # PyInstaller _MEIPASS
         os.path.join(getattr(sys, "_MEIPASS", ""), "playwright_browsers"),
     ]
     for _pw_browsers in _candidates:
